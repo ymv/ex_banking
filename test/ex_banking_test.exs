@@ -60,4 +60,11 @@ defmodule ExBankingTest do
     assert ExBanking.get_balance("foo6", "bar") == {:ok, 5.0e9}
   end
 
+  test "wrong_arguments" do
+    ExBanking.create_user("foo7")
+    assert ExBanking.deposit("foo7", 1.005, "bar") == {:error, :wrong_arguments}
+    assert ExBanking.deposit("foo7", -1, "bar") == {:error, :wrong_arguments}
+    assert ExBanking.deposit("foo7", "nan", "bar") == {:error, :wrong_arguments}
+  end
+
 end

@@ -5,6 +5,10 @@ defmodule ExBanking do
 
   use GenServer
 
+  @scale 100
+  @epsilon 1.0e-6
+  @balance_cap 1_000_000_000_000
+
   @type banking_error :: {:error,
     :wrong_arguments                |
     :user_already_exists            |
@@ -76,8 +80,10 @@ defmodule ExBanking do
 
   def assert_user(user, error) do
     case :ets.lookup(__MODULE__, user) do
-      [] -> {:error, error}
-      _ -> :ok
+      [] ->
+        {:error, error}
+      _ ->
+        :ok
     end
   end
 
@@ -86,9 +92,9 @@ defmodule ExBanking do
       true ->
         {:error, :wrong_arguments}
       false ->
-        scaled = number * 100
+        scaled = number * @scale
         rounded = round(scaled)
-        case abs(scaled - rounded) > 1.0e-6 do
+        case abs(scaled - rounded) > @epsilon do
           true ->
             {:error, :wrong_arguments}
           false ->
@@ -102,7 +108,7 @@ defmodule ExBanking do
   end
   
   def amount_to_float(amount) do
-    scaled = amount / 100
+    scaled = amount / @scale
     rounded = Float.round(scaled, 2)
     {:ok, rounded}
   end
@@ -145,7 +151,7 @@ defmodule ExBanking do
   def handle_call({:deposit, user, amount, currency}, _from, state) do
     current = do_get_balance(user, currency)
     new = current + amount
-    result = case new > 1_000_000_000_000 do
+    result = case new > @balance_cap do
       true ->
         {:error, :too_much_money}
       false ->
@@ -177,7 +183,7 @@ defmodule ExBanking do
       false ->
         new_from = current_from - amount
         new_to = current_to + amount
-        case new_to > 1_000_000_000_000 do
+        case new_to > @balance_cap do
           true ->
             {:error, :too_much_money}
           false ->

@@ -31,4 +31,4 @@ Such change in API seems less dramatic, than changing number format, so it's wha
 
 Decimal precision of two places is specified. That does not map cleanly to binary
 places, so while large precision inconsistencies (like `deposit("foo", 0.126, "bar")`) can be
-rejected with `:wrong_arguments`, small ones should be accepted, as they are artifacts of encoding.
+rejected with `:wrong_arguments`, small ones should be accepted, as they are artefacts of encoding.
