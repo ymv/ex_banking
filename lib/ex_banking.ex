@@ -3,11 +3,8 @@ defmodule ExBanking do
   Documentation for ExBanking.
   """
 
-  use GenServer
-
   @scale 100
   @epsilon 1.0e-6
-  @balance_cap 1_000_000_000_000
 
   @type banking_error :: {:error,
     :wrong_arguments                |
@@ -24,19 +21,15 @@ defmodule ExBanking do
 
   @spec create_user(user :: String.t) :: :ok | banking_error
   def create_user(user) do
-    case assert_user(user) do
-      :ok ->
-        {:error, :user_already_exists}
-      _ ->
-        GenServer.call(__MODULE__, {:create_user, user})
-    end
+    ExBanking.Wallets.create_user(user)
   end
 
   @spec deposit(user :: String.t, amount :: number, currency :: String.t) :: {:ok, new_balance :: number} | banking_error
   def deposit(user, amount, currency) do
-    with :ok <- assert_user(user),
+    with {:ok, user_id} <- lookup_user(user),
       {:ok, amount2} <- float_to_amount(amount),
-      {:ok, new_balance} <- GenServer.call(__MODULE__, {:deposit, user, amount2, currency})
+      {:ok, txid} <- ExBanking.Wallet.deposit(user_id, amount2, currency),
+      {:ok, new_balance} <- ExBanking.Wallet.commit(user_id, txid)
     do
       amount_to_float(new_balance)
     end
@@ -44,9 +37,10 @@ defmodule ExBanking do
 
   @spec withdraw(user :: String.t, amount :: number, currency :: String.t) :: {:ok, new_balance :: number} | banking_error
   def withdraw(user, amount, currency) do
-    with :ok <- assert_user(user),
+    with {:ok, user_id} <- lookup_user(user),
       {:ok, amount2} <- float_to_amount(amount),
-      {:ok, new_balance} <- GenServer.call(__MODULE__, {:withdraw, user, amount2, currency})
+      {:ok, txid} <- ExBanking.Wallet.withdraw(user_id, amount2, currency),
+      {:ok, new_balance} <- ExBanking.Wallet.commit(user_id, txid)
     do
       amount_to_float(new_balance)
     end
@@ -54,19 +48,19 @@ defmodule ExBanking do
 
   @spec get_balance(user :: String.t, currency :: String.t) :: {:ok, balance :: number} | banking_error
   def get_balance(user, currency) do
-    with :ok <- assert_user(user)
+    with {:ok, user_id} <- lookup_user(user)
     do
-      amount = do_get_balance(user, currency)
+      amount = ExBanking.Wallet.get_balance(user_id, currency)
       amount_to_float(amount)
     end
   end
 
   @spec send(from_user :: String.t, to_user :: String.t, amount :: number, currency :: String.t) :: {:ok, from_user_balance :: number, to_user_balance :: number} | banking_error
   def send(from_user, to_user, amount, currency) do
-    with :ok <- assert_user(from_user, :sender_does_not_exist),
-      :ok <- assert_user(to_user, :receiver_does_not_exist),
+    with {:ok, from_user_id} <- lookup_user(from_user, :sender_does_not_exist),
+      {:ok, to_user_id} <- lookup_user(to_user, :receiver_does_not_exist),
       {:ok, amount2} <- float_to_amount(amount),
-      {:ok, from_user_balance, to_user_balance} <- GenServer.call(__MODULE__, {:send, from_user, to_user, amount2, currency}),
+      {:ok, from_user_balance, to_user_balance} <- do_send(from_user_id, to_user_id, amount2, currency),
       {:ok, from_user_balance2} <- amount_to_float(from_user_balance),
       {:ok, to_user_balance2} <- amount_to_float(to_user_balance)
     do
@@ -74,16 +68,33 @@ defmodule ExBanking do
     end
   end
 
-  def assert_user(user) do
-    assert_user(user, :user_does_not_exist)
+  def do_send(from_user_id, to_user_id, amount, currency) do
+    case ExBanking.Wallet.withdraw(from_user_id, amount, currency) do
+      {:ok, txid_from} ->
+        case ExBanking.Wallet.deposit(to_user_id, amount, currency) do
+          {:ok, txid_to} ->
+            {:ok, from_user_balance} = ExBanking.Wallet.commit(from_user_id, txid_from)
+            {:ok, to_user_balance} = ExBanking.Wallet.commit(to_user_id, txid_to)
+            {:ok, from_user_balance, to_user_balance}
+          error ->
+            {:ok, _} = ExBanking.Wallet.rollback(from_user_id, txid_from)
+            error
+        end
+      error ->
+        error
+    end
   end
 
-  def assert_user(user, error) do
-    case :ets.lookup(__MODULE__, user) do
-      [] ->
+  def lookup_user(user) do
+    lookup_user(user, :user_does_not_exist)
+  end
+
+  def lookup_user(user, error) do
+    case ExBanking.Wallets.lookup(user) do
+      {:error, :user_does_not_exist} ->
         {:error, error}
-      _ ->
-        :ok
+      ok ->
+        ok
     end
   end
 
@@ -111,87 +122,5 @@ defmodule ExBanking do
     scaled = amount / @scale
     rounded = Float.round(scaled, 2)
     {:ok, rounded}
-  end
-
-  def do_get_balance(user, currency) do
-    case :ets.lookup(__MODULE__, {user, currency}) do
-      [] ->
-        0
-      [{ {_user, _currency}, amount }] ->
-        amount
-    end
-  end
-
-  def do_set_balance(user, currency, amount) do
-    :ets.insert(__MODULE__, { {user, currency}, amount })
-  end
-
-  def start_link() do
-    GenServer.start_link(__MODULE__, [], name: __MODULE__)
-  end
-
-  @impl true
-  def init(_) do
-    :ets.new(__MODULE__, [:set, :protected, :named_table])
-    {:ok, :none}
-  end
-
-  @impl true
-  def handle_call({:create_user, user}, _from, state) do
-    result = case assert_user(user) do
-      :ok ->
-        {:error, :user_already_exists}
-      _ ->
-        :ets.insert(__MODULE__, {user, :ok})
-        :ok
-    end
-    {:reply, result, state}
-  end
-
-  def handle_call({:deposit, user, amount, currency}, _from, state) do
-    current = do_get_balance(user, currency)
-    new = current + amount
-    result = case new > @balance_cap do
-      true ->
-        {:error, :too_much_money}
-      false ->
-        do_set_balance(user, currency, new)
-        {:ok, new}
-    end
-    {:reply, result, state}
-  end
-
-  def handle_call({:withdraw, user, amount, currency}, _from, state) do
-    current = do_get_balance(user, currency)
-    result = case current < amount do
-      true ->
-        {:error, :not_enough_money}
-      false ->
-        new = current - amount
-        do_set_balance(user, currency, new)
-        {:ok, new}
-    end
-    {:reply, result, state}
-  end
-
-  def handle_call({:send, user_from, user_to, amount, currency}, _from, state) do
-    current_from = do_get_balance(user_from, currency)
-    current_to = do_get_balance(user_to, currency)
-    result = case current_from < amount do
-      true ->
-        {:error, :not_enough_money}
-      false ->
-        new_from = current_from - amount
-        new_to = current_to + amount
-        case new_to > @balance_cap do
-          true ->
-            {:error, :too_much_money}
-          false ->
-            do_set_balance(user_from, currency, new_from)
-            do_set_balance(user_to, currency, new_to)
-            {:ok, new_from, new_to}
-        end
-    end
-    {:reply, result, state}
   end
 end

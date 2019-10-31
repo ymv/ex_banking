@@ -4,8 +4,33 @@ https://coingaming.github.io/elixir-test/
 
 THIS IS NOT FINAL VERSION
 
-Minimal implementation, should pass functional tests, but it does not meet
-performance requirements, as everything is done in single process.
+Partial implementation, should pass functional tests and posses required
+performance properties, but no rate limiting yet. And no tests for concurrency
+
+## Registry bottleneck
+
+Should not be a problem, as partitioning is supported out of the box.
+
+## Wallet transactions
+
+Only practical benefit from transaction commit/rollback mess here is fixing
+potential deadlock in send:
+
+- Process 1: A sends to B
+
+- Process 1: Withdraw from A
+
+- Process 2: deposits loads on money into A and B, almost to the cap
+
+- Process 1: Cannot deposit to B, cannot return money to A
+
+With two phases, returning money does not involve changing balance, so it cannot
+be blocked by stuffing account - process 2 will fail when creating deposit transaction
+for A.
+
+Other way to fix that would be ensuring, that only one high-level transaction (ExBanking function)
+is running over one account - for example by running them in worker processes, limited to 1 per
+wallet. But two-phase payment is somewhat common pattern, so I decided to show it here.
 
 ## Float problem
 
