@@ -2,10 +2,15 @@
 
 https://coingaming.github.io/elixir-test/
 
-THIS IS NOT FINAL VERSION
+Current implementation, should pass functional tests, posses required
+performance properties and rate limit. But no tests for concurrency yet
 
-Partial implementation, should pass functional tests and posses required
-performance properties, but no rate limiting yet. And no tests for concurrency
+## Throttling
+
+Throttling works by checking `erlang:process_info(message_queue_len)`. While
+this is not perfectly reliable, and allow more than ten messages in queue
+due to inherent raciness of check-perform pattern, it is cheap and does
+not involve new potential bottleneck
 
 ## Registry bottleneck
 

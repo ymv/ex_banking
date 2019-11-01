@@ -5,6 +5,7 @@ defmodule ExBanking do
 
   @scale 100
   @epsilon 1.0e-6
+  @messages_throttle 10
 
   @type banking_error :: {:error,
     :wrong_arguments                |
@@ -57,8 +58,8 @@ defmodule ExBanking do
 
   @spec send(from_user :: String.t, to_user :: String.t, amount :: number, currency :: String.t) :: {:ok, from_user_balance :: number, to_user_balance :: number} | banking_error
   def send(from_user, to_user, amount, currency) do
-    with {:ok, from_user_id} <- lookup_user(from_user, :sender_does_not_exist),
-      {:ok, to_user_id} <- lookup_user(to_user, :receiver_does_not_exist),
+    with {:ok, from_user_id} <- lookup_user(from_user, :sender_does_not_exist, :too_many_requests_to_sender),
+      {:ok, to_user_id} <- lookup_user(to_user, :receiver_does_not_exist, :too_many_requests_to_receiver),
       {:ok, amount2} <- float_to_amount(amount),
       {:ok, from_user_balance, to_user_balance} <- do_send(from_user_id, to_user_id, amount2, currency),
       {:ok, from_user_balance2} <- amount_to_float(from_user_balance),
@@ -86,15 +87,21 @@ defmodule ExBanking do
   end
 
   def lookup_user(user) do
-    lookup_user(user, :user_does_not_exist)
+    lookup_user(user, :user_does_not_exist, :too_many_requests_to_user)
   end
 
-  def lookup_user(user, error) do
+  def lookup_user(user, error, throttle_error) do
     case ExBanking.Wallets.lookup(user) do
       {:error, :user_does_not_exist} ->
         {:error, error}
-      ok ->
-        ok
+      {:ok, pid} ->
+        {:message_queue_len, messages} = :erlang.process_info(pid, :message_queue_len)
+        case messages >= @messages_throttle do
+          true ->
+            {:error, throttle_error}
+          false ->
+            {:ok, pid}
+        end
     end
   end
 

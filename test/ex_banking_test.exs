@@ -67,4 +67,29 @@ defmodule ExBankingTest do
     assert ExBanking.deposit("foo7", "nan", "bar") == {:error, :wrong_arguments}
   end
 
+  test "throttle" do
+    ExBanking.create_user("foo8a")
+    ExBanking.create_user("foo8b")
+    ExBanking.deposit("foo8a", 1_000_000, "bar")
+    self1 = self()
+    results = for i <- 1..1000 do
+      for f <- [
+        fn -> ExBanking.get_balance("foo8a", "bar") end,
+        fn -> ExBanking.get_balance("foo8b", "bar") end,
+        fn -> ExBanking.send("foo8a", "foo8b", 1, "bar") end
+      ] do
+        spawn(fn ->
+          case f.() do
+            {:ok, _} ->
+              :ok
+            {:error, error} ->
+              send(self1, error)
+          end
+        end)
+      end
+    end
+    assert_receive(:too_many_requests_to_user, 5000)
+    assert_receive(:too_many_requests_to_sender, 5000)
+    assert_receive(:too_many_requests_to_receiver, 5000)
+  end
 end
